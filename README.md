@@ -175,6 +175,7 @@ CSP_JAX/
 ├── base.py gibbs.py     # BaseCSP / GibbsCSP estimator
 ├── ESS.py _posterior.py _factor_scores.py
 └── _rsp/                # RSP alignment (varimax + exact sign-permutation)
+PBMC/                    # PBMC3k preprocessing and CSP analysis workflow
 demos/                   # two executed notebooks
 ```
 
@@ -186,6 +187,71 @@ demos/                   # two executed notebooks
   paper §3.3 trade-off).
 - [`demos/demo2.ipynb`](demos/demo2.ipynb) — sparse random loadings,
   `n=100 ≪ p=1000`, heteroscedastic noise: `E(H*|y)=5` at `H=50`.
+
+## PBMC3k analysis
+
+The fixed PBMC workflow is `X_scaled -> GibbsCSP(center=False) -> RSP ->
+conditional-mean scores -> loading-column L2 norm weighting -> all 50 columns
+-> Leiden (resolution 0.40) -> 9 clusters`. Cluster plots use display labels
+1–9; raw labels and marker files remain zero-based. The native `H*` posterior
+is summarized separately in the original CSP coordinates, not after varimax
+rotation. See `PBMC/plan.md` for the fixed workflow and current diagnostics.
+
+`PBMC/data_processing.py` reproduces the Seurat/Scanpy preprocessing, including
+`seurat_v3` HVG selection on counts with `n_top_genes=2000`,
+`min_mean=0.0125`, `max_mean=3`, and `min_disp=0.5`, followed by regression of
+`total_counts` and `pct_counts_mt` and `scale(max_value=10)`. Only the 2000
+HVGs are densified for the `2638 x 2000` model input. The full AnnData retains
+`lognorm` for Wilcoxon marker analysis.
+
+`PBMC/PCA.py` builds the independent PCA reference from the same `X_scaled`:
+50 components, the first 40 for the neighbor graph, and Leiden resolution 0.7.
+PCA is a reference, not cell-type truth. ARI and AMI measure clustering
+agreement only; the output field named `nmi` contains AMI for compatibility.
+
+The fixed CSP settings are `H=50`, `alpha=5`, `a_theta=b_theta=2`,
+`theta_inf=0.05`, `a_sigma=b_sigma=1`, `n_iter=20000`, `burn_in=10000`,
+`thin=10`, and `seed=2026`. RSP is required. Conditional means are accumulated
+in batches using each draw's RSP transform and multiplied by the aligned
+`B_hat_` column norms. All 50 weighted columns are used for the Euclidean
+neighbor graph and Leiden clustering. The current nine-cluster result is fixed
+as an analysis choice, not evidence for a true cell-type count.
+
+```bash
+# Fixed preprocessing
+python PBMC/data_processing.py PBMC/data/pbmc3k_raw.h5ad \
+  --output PBMC/data/notebook_scaled_preprocessed.h5ad \
+  --qc-figure-dir PBMC/figures/notebook_scaled_qc
+
+# PCA reference baseline
+python PBMC/PCA.py PBMC/data/pbmc3k_raw.h5ad \
+  --output PBMC/data/notebook_scaled_pca_baseline.h5ad \
+  --figure-dir PBMC/figures/notebook_scaled_pca
+
+# Formal CSP chain (1000 retained draws)
+python PBMC/CSP_GS.py PBMC/data/notebook_scaled_pca_baseline.h5ad \
+  --output PBMC/data/notebook_scaled_csp_norm_d50_r0p4_k9_n20000_b10000_t10_h50.h5ad \
+  --figure-dir PBMC/figures/notebook_scaled_csp_norm_d50_r0p4_k9_n20000_b10000_t10_h50
+
+# Summary report
+python -m jupyter nbconvert --to notebook --execute --inplace PBMC/PBMC.ipynb
+```
+
+Outputs include the downstream H5AD, a separate model NPZ with raw draws,
+`H*`, RSP transforms, all 50 score columns, loading norms and diagnostics,
+figures, and top-5 marker tables. `PBMC/PBMC.ipynb` summarizes the saved formal
+results without hard-coding cluster counts or agreement metrics.
+
+The saved `validation_status` is `review_required` when RSP is incomplete, ESS
+is low, or every retained draw has `H* = H - 1`. Saturation means that the
+truncation and native dimension posterior are not validated; it is not evidence
+that the model found the correct number of factors. Do not select `theta_inf`,
+`H`, or `alpha` by clustering performance.
+
+PBMC scripts require Scanpy, AnnData, SciPy, pandas, scikit-learn, scikit-misc,
+python-igraph, umap-learn, and matplotlib in addition to the `ess` and `rsp`
+optional dependencies; these analysis dependencies are not required by the
+core package.
 
 ## Citation
 
