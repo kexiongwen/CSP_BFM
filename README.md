@@ -94,8 +94,8 @@ with the cumulative shrinkage process prior (paper eq. 6) on the column
 variances of $\Lambda=(\lambda_{jh})$:
 
 $$
-(\theta_h \mid \pi_h) \sim (1-\pi_h)\operatorname{IG}(a_\theta,b_\theta)
-  + \pi_h\,\delta_{\theta_\infty},
+(\theta_h \mid \pi_h) \sim (1-\pi_h)\operatorname{IG}(a_\theta,b_\theta) +
+  \pi_h\,\delta_{\theta_\infty},
 \qquad
 \pi_h=\sum_{l\le h}\omega_l,
 \qquad
