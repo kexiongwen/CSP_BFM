@@ -219,6 +219,42 @@ class BaseCSP:
         self._check_fitted()
         return self._B_hat @ self._B_hat.T + np.diag(self._sigma2_hat)
 
+    def covariance_zero_mask(self, threshold=1e-4, *, include_diagonal=False):
+        """Return the estimated zero-support mask of the posterior covariance.
+
+        Uses ``Sigma_mean_``, the Monte Carlo posterior-mean covariance.
+        Entries with absolute posterior mean strictly below ``threshold``
+        are estimated as zero. The result is symmetric; diagonal entries
+        are False unless ``include_diagonal=True``.
+        """
+        self._check_fitted()
+        from ._posterior import covariance_zero_mask
+
+        return covariance_zero_mask(
+            self.Sigma_mean_, threshold=threshold,
+            include_diagonal=include_diagonal,
+        )
+
+    def covariance_sparsity_metrics(
+        self, sigma_true, threshold=1e-4, *, include_diagonal=False
+    ):
+        """Compare the estimated covariance support with a known true matrix.
+
+        Nonzero entries are discoveries. Returns TP, FP, FN, TN together with
+        ``fdr = FP / (TP + FP)`` and false non-discovery rate
+        ``fndr = FN / (FN + TN)``. Rates are NaN for zero denominators. Counts
+        use the upper triangle, excluding the diagonal by default. Exact zeros
+        in ``sigma_true`` define the true support; estimated zeros use the same
+        strict ``Sigma_mean_`` threshold as :meth:`covariance_zero_mask`.
+        """
+        self._check_fitted()
+        from ._posterior import covariance_sparsity_metrics
+
+        return covariance_sparsity_metrics(
+            self.Sigma_mean_, sigma_true, threshold=threshold,
+            include_diagonal=include_diagonal,
+        )
+
     # ------------------------------------------------------------------
     # factor-dimension selection
     # ------------------------------------------------------------------

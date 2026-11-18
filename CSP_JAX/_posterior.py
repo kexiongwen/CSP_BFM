@@ -16,6 +16,12 @@ compute budget and can be computed from a deterministic equidistant
 subsample; the cheap diagonal variance and pair covariances always use
 all draws.
 
+Covariance-support utilities threshold entries of the posterior-mean
+covariance and compare the estimated support with a known true matrix,
+returning TP/FP/FN/TN, FDR and FNDR. The LH_BFM conventions are retained:
+strict absolute thresholds, exact zeros in the true matrix, and upper-
+triangle counts that exclude the diagonal by default.
+
 Ported from the ``bfm`` package of the L_{1/2} paper (LH_BFM,
 ``bfm/_posterior.py``); the variational-moment half of that module is
 not ported, since this package has no CAVI estimator.  The truncation
@@ -37,6 +43,8 @@ __all__ = [
     "montecarlo_sigma_variance",
     "montecarlo_sigma_diag_variance",
     "montecarlo_cov_sigma_pairs",
+    "covariance_zero_mask",
+    "covariance_sparsity_metrics",
 ]
 
 # Default cap on the number of entries of a returned p x p matrix.
@@ -382,3 +390,115 @@ def montecarlo_cov_sigma_pairs(B, sigma2, pairs):
             Y += sigma2[:, k]
         out[idx] = (X * Y).mean() - X.mean() * Y.mean()
     return out
+
+
+def _as_covariance_matrix(matrix, name):
+    try:
+        matrix = np.asarray(matrix, dtype=_F64)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"{name} must be convertible to a float64 array") from exc
+    if matrix.ndim != 2 or matrix.shape[0] < 1 or matrix.shape[0] != matrix.shape[1]:
+        raise ValueError(f"{name} must be a nonempty square matrix, got {matrix.shape}")
+    if not np.isfinite(matrix).all():
+        raise ValueError(f"{name} must contain only finite values")
+    if not np.allclose(matrix, matrix.T):
+        raise ValueError(f"{name} must be symmetric")
+    return matrix
+
+
+def _sparsity_options(threshold, include_diagonal):
+    if isinstance(threshold, (bool, np.bool_, str, bytes)):
+        raise ValueError("threshold must be a finite nonnegative number")
+    try:
+        threshold = float(threshold)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("threshold must be a finite nonnegative number") from exc
+    if not np.isfinite(threshold) or threshold < 0:
+        raise ValueError("threshold must be a finite nonnegative number")
+    if not isinstance(include_diagonal, (bool, np.bool_)):
+        raise ValueError("include_diagonal must be a boolean")
+    return threshold, bool(include_diagonal)
+
+
+def covariance_zero_mask(sigma_mean, threshold=1e-4, *, include_diagonal=False):
+    """Identify zero entries from a posterior-mean covariance matrix.
+
+    An entry is estimated as zero when its absolute posterior mean is strictly
+    smaller than ``threshold``. The upper triangle determines the returned
+    symmetric mask. By default diagonal entries are excluded and set to False.
+
+    Parameters
+    ----------
+    sigma_mean : array-like, shape (p, p)
+        Posterior-mean covariance matrix.
+    threshold : float, default 1e-4
+        Finite nonnegative cutoff. Equality does not identify a zero.
+    include_diagonal : bool, default False
+        Whether to apply the rule to diagonal entries as well.
+
+    Returns
+    -------
+    numpy.ndarray, shape (p, p), bool
+        Symmetric mask whose True entries are estimated zeros.
+    """
+    sigma_mean = _as_covariance_matrix(sigma_mean, "sigma_mean")
+    threshold, include_diagonal = _sparsity_options(threshold, include_diagonal)
+    zero = np.abs(sigma_mean) < threshold
+    if not include_diagonal:
+        np.fill_diagonal(zero, False)
+    zero = np.triu(zero)
+    return zero | zero.T
+
+
+def covariance_sparsity_metrics(
+    sigma_mean, sigma_true, threshold=1e-4, *, include_diagonal=False
+):
+    """Evaluate covariance-support recovery against a known true covariance.
+
+    Nonzero entries are discoveries. With TP/FP/FN/TN denoting correctly
+    selected nonzeros, falsely selected nonzeros, missed nonzeros, and
+    correctly selected zeros, respectively, this returns
+    ``FDR = FP / (TP + FP)`` and ``FNDR = FN / (FN + TN)``. A rate is NaN when
+    its denominator is zero. Counts use the upper triangle only, excluding the
+    diagonal by default, so symmetric entries are not counted twice. Exact
+    zeros in ``sigma_true`` define the true sparse support.
+
+    Parameters
+    ----------
+    sigma_mean, sigma_true : array-like, shape (p, p)
+        Posterior-mean and true covariance matrices.
+    threshold : float, default 1e-4
+        Cutoff for estimating zeros in ``sigma_mean``.
+    include_diagonal : bool, default False
+        Whether to include diagonal entries in the counts.
+
+    Returns
+    -------
+    dict
+        Integer counts ``tp``, ``fp``, ``fn``, ``tn`` and floating-point rates
+        ``fdr`` and ``fndr``.
+    """
+    zero = covariance_zero_mask(
+        sigma_mean, threshold=threshold, include_diagonal=include_diagonal
+    )
+    sigma_true = _as_covariance_matrix(sigma_true, "sigma_true")
+    if sigma_true.shape != zero.shape:
+        raise ValueError(
+            f"sigma_true must have shape {zero.shape}, got {sigma_true.shape}"
+        )
+    _, include_diagonal = _sparsity_options(threshold, include_diagonal)
+    indices = np.triu_indices(zero.shape[0], k=0 if include_diagonal else 1)
+    estimated_zero = zero[indices]
+    true_zero = sigma_true[indices] == 0.0
+    tp = int(np.count_nonzero(~estimated_zero & ~true_zero))
+    fp = int(np.count_nonzero(~estimated_zero & true_zero))
+    fn = int(np.count_nonzero(estimated_zero & ~true_zero))
+    tn = int(np.count_nonzero(estimated_zero & true_zero))
+    return {
+        "tp": tp,
+        "fp": fp,
+        "fn": fn,
+        "tn": tn,
+        "fdr": float(fp / (tp + fp)) if tp + fp else np.nan,
+        "fndr": float(fn / (fn + tn)) if fn + tn else np.nan,
+    }
